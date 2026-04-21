@@ -1,0 +1,49 @@
+name: Sync Docker Images to Aliyun ACR
+
+on:
+  push:
+    tags:
+      - '*'
+
+jobs:
+  sync-image:
+    runs-on: ubuntu-latest
+    env:
+      ALIYUN_REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}
+      ALIYUN_NAMESPACE: ${{ secrets.ALIYUN_NAMESPACE }}
+      ALIYUN_USERNAME: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
+      ALIYUN_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Install skopeo and jq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y skopeo jq
+
+      - name: Determine task key
+        run: |
+          echo "RAW_TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+          echo "TASK_KEY=${RAW_TAG#-}" >> $GITHUB_ENV
+
+      - name: Load sync tasks
+        run: |
+          if [ ! -f .github/image-sync-tasks.json ]; then
+            echo "{}" > .github/image-sync-tasks.json
+          fi
+          TASK_JSON=$(cat .github/image-sync-tasks.json)
+          SRC_IMAGE=$(echo "$TASK_JSON" | jq -r ".[\"${TASK_KEY}\"].source")
+          TARGET_REPO=$(echo "$TASK_JSON" | jq -r ".[\"${TASK_KEY}\"].target_repo")
+          TARGET_TAG=$(echo "$TASK_JSON" | jq -r ".[\"${TASK_KEY}\"].target_tag")
+          TARGET_IMAGE="${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${TARGET_REPO}:${TARGET_TAG}"
+          echo "SRC_IMAGE=$SRC_IMAGE" >> $GITHUB_ENV
+          echo "TARGET_IMAGE=$TARGET_IMAGE" >> $GITHUB_ENV
+
+      - name: Login to Aliyun ACR
+        run: |
+          echo $ALIYUN_PASSWORD | docker login $ALIYUN_REGISTRY -u $ALIYUN_USERNAME --password-stdin
+
+      - name: Sync image
+        run: |
+          skopeo copy --all docker://$SRC_IMAGE docker://$TARGET_IMAGE
