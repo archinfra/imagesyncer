@@ -3,7 +3,7 @@ name: Sync Image To Aliyun ACR
 on:
   push:
     tags:
-      - '-*'
+      - 'sync-*'
   workflow_dispatch:
     inputs:
       task:
@@ -43,7 +43,7 @@ jobs:
             RAW_TAG="manual-${TASK_KEY}"
           else
             RAW_TAG="${GITHUB_REF#refs/tags/}"
-            TASK_KEY="${RAW_TAG#-}"
+            TASK_KEY="${RAW_TAG#sync-}"
           fi
 
           if [ -z "$TASK_KEY" ]; then
