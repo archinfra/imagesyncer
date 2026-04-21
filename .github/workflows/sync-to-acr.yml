@@ -24,6 +24,7 @@ jobs:
       ALIYUN_PASSWORD: ${{ secrets.ALIYUN_PASSWORD }}
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -46,16 +47,12 @@ jobs:
             TASK_KEY="${RAW_TAG#sync-}"
           fi
 
-          if [ -z "$TASK_KEY" ]; then
-            echo "任务名为空，无法继续。"
-            exit 1
-          fi
+          [ -n "$TASK_KEY" ] || { echo "任务名为空"; exit 1; }
 
           echo "RAW_TAG=$RAW_TAG" >> "$GITHUB_ENV"
           echo "TASK_KEY=$TASK_KEY" >> "$GITHUB_ENV"
-          echo "触发任务: $TASK_KEY"
 
-      - name: Validate config and load task
+      - name: Load task
         shell: bash
         run: |
           set -euo pipefail
@@ -67,27 +64,19 @@ jobs:
           test -f .github/image-sync-tasks.json || { echo '.github/image-sync-tasks.json 不存在'; exit 1; }
 
           TASK_JSON=$(jq -c --arg key "$TASK_KEY" '.[$key]' .github/image-sync-tasks.json)
-          if [ -z "$TASK_JSON" ] || [ "$TASK_JSON" = "null" ]; then
-            echo "未找到任务: $TASK_KEY"
-            echo '可用任务列表:'
-            jq -r 'keys[]' .github/image-sync-tasks.json
-            exit 1
-          fi
+          [ -n "$TASK_JSON" ] && [ "$TASK_JSON" != "null" ] || { echo "未找到任务: $TASK_KEY"; jq -r 'keys[]' .github/image-sync-tasks.json; exit 1; }
 
           SRC_IMAGE=$(echo "$TASK_JSON" | jq -r '.source')
           TARGET_REPO=$(echo "$TASK_JSON" | jq -r '.target_repo')
           TARGET_TAG=$(echo "$TASK_JSON" | jq -r '.target_tag')
 
-          test -n "$SRC_IMAGE" && [ "$SRC_IMAGE" != "null" ] || { echo 'source 未配置'; exit 1; }
-          test -n "$TARGET_REPO" && [ "$TARGET_REPO" != "null" ] || { echo 'target_repo 未配置'; exit 1; }
-          test -n "$TARGET_TAG" && [ "$TARGET_TAG" != "null" ] || { echo 'target_tag 未配置'; exit 1; }
-
-          TARGET_IMAGE="${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${TARGET_REPO}:${TARGET_TAG}"
+          [ -n "$SRC_IMAGE" ] && [ "$SRC_IMAGE" != "null" ] || { echo 'source 未配置'; exit 1; }
+          [ -n "$TARGET_REPO" ] && [ "$TARGET_REPO" != "null" ] || { echo 'target_repo 未配置'; exit 1; }
+          [ -n "$TARGET_TAG" ] && [ "$TARGET_TAG" != "null" ] || { echo 'target_tag 未配置'; exit 1; }
 
           echo "SRC_IMAGE=$SRC_IMAGE" >> "$GITHUB_ENV"
-          echo "TARGET_IMAGE=$TARGET_IMAGE" >> "$GITHUB_ENV"
-          echo "源镜像: $SRC_IMAGE"
-          echo "目标镜像: $TARGET_IMAGE"
+          echo "TARGET_REPO=$TARGET_REPO" >> "$GITHUB_ENV"
+          echo "TARGET_TAG=$TARGET_TAG" >> "$GITHUB_ENV"
 
       - name: Login to Docker Hub
         if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
@@ -102,23 +91,34 @@ jobs:
           set -euo pipefail
           printf '%s' "$ALIYUN_PASSWORD" | skopeo login "$ALIYUN_REGISTRY" --username "$ALIYUN_USERNAME" --password-stdin
 
-      - name: Inspect source image manifest
+      - name: Sync amd64
         shell: bash
         run: |
           set -euo pipefail
-          skopeo inspect --raw "docker://$SRC_IMAGE" > manifest.json
-          echo 'Manifest mediaType:'
-          jq -r '.mediaType // "unknown"' manifest.json
-          echo 'Manifest platforms:'
-          jq -r '.manifests[]?.platform | "- \(.os)/\(.architecture)\((.variant // "") | if . == "" then "" else "/" + . end)"' manifest.json || true
+          TARGET_IMAGE="${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${TARGET_REPO}:${TARGET_TAG}-amd64"
+          skopeo copy --override-arch amd64 --retry-times 3 "docker://$SRC_IMAGE" "docker://$TARGET_IMAGE"
+          echo "AMD64_IMAGE=$TARGET_IMAGE" >> "$GITHUB_ENV"
 
-      - name: Sync image to Aliyun ACR
+      - name: Sync arm64
         shell: bash
         run: |
           set -euo pipefail
-          skopeo copy --all --retry-times 3 "docker://$SRC_IMAGE" "docker://$TARGET_IMAGE"
+          TARGET_IMAGE="${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${TARGET_REPO}:${TARGET_TAG}-arm64"
+          skopeo copy --override-arch arm64 --retry-times 3 "docker://$SRC_IMAGE" "docker://$TARGET_IMAGE"
+          echo "ARM64_IMAGE=$TARGET_IMAGE" >> "$GITHUB_ENV"
+
+      - name: Sync default tag as amd64
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET_IMAGE="${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${TARGET_REPO}:${TARGET_TAG}"
+          skopeo copy --override-arch amd64 --retry-times 3 "docker://$SRC_IMAGE" "docker://$TARGET_IMAGE"
+          echo "DEFAULT_IMAGE=$TARGET_IMAGE" >> "$GITHUB_ENV"
 
       - name: Summary
         shell: bash
         run: |
-          echo "同步完成: $SRC_IMAGE -> $TARGET_IMAGE"
+          echo "同步完成:"
+          echo "  amd64  -> $AMD64_IMAGE"
+          echo "  arm64  -> $ARM64_IMAGE"
+          echo "  default-> $DEFAULT_IMAGE"
