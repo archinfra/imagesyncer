@@ -1,0 +1,7 @@
+{
+  "n8n": {
+    "source": "docker.io/n8nio/n8n:next",
+    "target_repo": "n8n",
+    "target_tag": "next"
+  }
+}
