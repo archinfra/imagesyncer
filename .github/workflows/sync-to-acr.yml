@@ -24,6 +24,13 @@ jobs:
       ALIYUN_PASSWORD: ${{ secrets.ALIYUN_PASSWORD }}
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      # Docker Hub's OCI/zstd layers can be rejected by Aliyun ACR.
+      SKOPEO_DEST_FLAGS: >-
+        --format v2s2
+        --dest-compress-format gzip
+        --dest-force-compress-format
+        --dest-precompute-digests
+        --retry-times 3
 
     steps:
       - name: Checkout
@@ -96,7 +103,7 @@ jobs:
         run: |
           set -euo pipefail
           TARGET_IMAGE="${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${TARGET_REPO}:${TARGET_TAG}-amd64"
-          skopeo copy --override-arch amd64 --retry-times 3 "docker://$SRC_IMAGE" "docker://$TARGET_IMAGE"
+          skopeo copy $SKOPEO_DEST_FLAGS --override-arch amd64 "docker://$SRC_IMAGE" "docker://$TARGET_IMAGE"
           echo "AMD64_IMAGE=$TARGET_IMAGE" >> "$GITHUB_ENV"
 
       - name: Sync arm64
@@ -104,7 +111,7 @@ jobs:
         run: |
           set -euo pipefail
           TARGET_IMAGE="${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${TARGET_REPO}:${TARGET_TAG}-arm64"
-          skopeo copy --override-arch arm64 --retry-times 3 "docker://$SRC_IMAGE" "docker://$TARGET_IMAGE"
+          skopeo copy $SKOPEO_DEST_FLAGS --override-arch arm64 "docker://$SRC_IMAGE" "docker://$TARGET_IMAGE"
           echo "ARM64_IMAGE=$TARGET_IMAGE" >> "$GITHUB_ENV"
 
       - name: Sync default tag as amd64
@@ -112,7 +119,7 @@ jobs:
         run: |
           set -euo pipefail
           TARGET_IMAGE="${ALIYUN_REGISTRY}/${ALIYUN_NAMESPACE}/${TARGET_REPO}:${TARGET_TAG}"
-          skopeo copy --override-arch amd64 --retry-times 3 "docker://$SRC_IMAGE" "docker://$TARGET_IMAGE"
+          skopeo copy $SKOPEO_DEST_FLAGS --override-arch amd64 "docker://$SRC_IMAGE" "docker://$TARGET_IMAGE"
           echo "DEFAULT_IMAGE=$TARGET_IMAGE" >> "$GITHUB_ENV"
 
       - name: Summary
